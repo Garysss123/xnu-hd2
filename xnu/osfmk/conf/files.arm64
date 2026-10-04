@@ -1,0 +1,44 @@
+OPTIONS/show_space		optional show_space
+OPTIONS/gdb				optional gdb
+OPTIONS/iplmeas			optional iplmeas
+OPTIONS/fb				optional fb
+OPTIONS/debug			optional debug
+OPTIONS/gprof		optional gprof
+OPTIONS/dynamic_num_nodes	optional dynamic_num_nodes
+OPTIONS/vtoc_compat	optional vtoc_compat
+OPTIONS/fddi		optional fddi
+
+osfmk/console/panic_dialog.c	     optional  vc device-driver
+osfmk/console/video_console.c        optional  vc device-driver
+osfmk/console/arm/video_scroll.c	optional vc device-driver
+osfmk/console/arm/serial_console.c  optional vc
+
+osfmk/arm64/memcmp.s		standard
+osfmk/arm64/memmove.s		standard
+osfmk/arm64/memset.s		standard
+osfmk/arm64/stubs.s		standard
+
+osfmk/arm/loose_ends.c		standard
+osfmk/arm/model_dep.c		standard
+osfmk/arm/locks_arm.c		standard
+osfmk/arm/machroutines.c	standard
+osfmk/arm/pmCPU.c		standard
+osfmk/arm/mp.c			standard
+osfmk/arm/pal.c			standard
+osfmk/arm/commpage/commpage.c	standard
+osfmk/arm/etimer.c		standard
+osfmk/arm/rtclock.c 	standard
+osfmk/arm/cpu.c 		standard
+osfmk/arm/conf.c 		standard
+
+osfmk/arm64/cpu_number.s 	standard
+osfmk/arm64/atomics.s 		standard
+osfmk/arm64/locks_arm64.s	standard
+osfmk/arm64/machine_routines_asm.s	standard
+osfmk/arm64/thread_initialize.c 	standard
+osfmk/arm64/arm64_vm_init.c		standard
+osfmk/arm64/pmap.c			standard
+
+osfmk/kdp/ml/arm/kdp_machdep.c         optional        mach_kdp
+osfmk/kdp/ml/arm/kdp_vm.c              optional        mach_kdp
+

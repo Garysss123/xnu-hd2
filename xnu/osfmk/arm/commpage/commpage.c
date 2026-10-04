@@ -1,0 +1,134 @@
+/*
+ * Copyright 2013, winocm. <winocm@icloud.com>
+ * All rights reserved.
+ * 
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ * 
+ *   Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ * 
+ *   Redistributions in binary form must reproduce the above copyright notice, this
+ *   list of conditions and the following disclaimer in the documentation and/or
+ *   other materials provided with the distribution.
+ * 
+ *   If you are going to use this software in any form that does not involve
+ *   releasing the source to this project or improving it, let me know beforehand.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/*
+ * ARM commpage support. Time is still broken though, willfix.
+ */
+
+#include <mach/mach_types.h>
+#include <mach/machine.h>
+#include <mach/vm_map.h>
+#include <machine/commpage.h>
+#include <machine/pmap.h>
+#include <kern/processor.h>
+#include <vm/vm_map.h>
+#include <vm/vm_kern.h>
+#include <machine/cpu_capabilities.h>
+#if BOARD_CONFIG_QSD8250_LEO
+#include <machine/machine_routines.h>
+#endif
+
+void *common_page_ptr = NULL;
+decl_simple_lock_data(static,commpage_active_cpus_lock)
+
+void commpage_update_active_cpus(void)
+{
+    if(!common_page_ptr)
+        return;
+
+    /* Lock the lock and update the global page value */
+    simple_lock(&commpage_active_cpus_lock);
+#if BOARD_CONFIG_ARMPBA8 || BOARD_CONFIG_QSD8250_LEO
+    /* Original iOS7 libdispatch sizes its heap from LOGICAL_CPUS at +0x36.
+     * This reference machine runs exactly one present/active physical CPU. */
+    assert(processor_avail_count == 1);
+    *(uint8_t*)_COMM_PAGE_NCPUS = (uint8_t)processor_avail_count;
+    *(uint8_t*)(_COMM_PAGE_BASE_ADDRESS + 0x34) = (uint8_t)processor_avail_count;
+    *(uint8_t*)(_COMM_PAGE_BASE_ADDRESS + 0x35) = (uint8_t)processor_avail_count;
+    *(uint8_t*)(_COMM_PAGE_BASE_ADDRESS + 0x36) = (uint8_t)processor_avail_count;
+#else
+    *(uint32_t*)_COMM_PAGE_NCPUS = processor_avail_count;
+#endif
+
+    /* Done. */
+    simple_unlock(&commpage_active_cpus_lock);
+}
+
+void commpage_populate(void)
+{
+    uint64_t ram_size;
+
+    /* Map the commonpage first. */
+    pmap_create_sharedpage();
+
+    /* Set the commonpage PtrValue. */
+    common_page_ptr = (void*)_COMM_PAGE_BASE_ADDRESS;
+
+    /* Get the ram size */
+    ram_size = ml_cpu_cache_size(0);
+
+    /* Start stuffing things into the commonpage. */
+#if BOARD_CONFIG_QSD8250_LEO
+    *(uint32_t*)_COMM_PAGE_CPUFAMILY = CPUFAMILY_UNKNOWN; /* Scorpion has no matching Apple family ID. */
+#else
+    *(uint32_t*)_COMM_PAGE_CPUFAMILY = CPUFAMILY_ARM_13;     /* Cortex-A8 */
+#endif
+    *(uint16_t*)_COMM_PAGE_MYSTERY_VALUE = 3;                /* It's a mystery! */
+    *(uint32_t*)_COMM_PAGE_CPU_CAPABILITIES = kUP;           /* No capabilities, UP system. */
+    *(uint64_t*)_COMM_PAGE_MEMORY_SIZE = ram_size;           /* Set our ram size */
+
+    /* Update CPU count */
+    simple_lock_init(&commpage_active_cpus_lock, 0);
+    commpage_update_active_cpus();
+#if BOARD_CONFIG_ARMPBA8 || BOARD_CONFIG_QSD8250_LEO
+#if BOARD_CONFIG_QSD8250_LEO
+    ml_cpu_info_t cpu_info;
+    ml_cpu_get_info(&cpu_info);
+    assert(cpu_info.cache_line_size > 0 && cpu_info.cache_line_size <= UINT16_MAX);
+    *(uint16_t*)(_COMM_PAGE_BASE_ADDRESS + 0x26) = (uint16_t)cpu_info.cache_line_size;
+#else
+    *(uint16_t*)(_COMM_PAGE_BASE_ADDRESS + 0x26) = 64; /* Cortex-A8 cache-line bytes. */
+#endif
+    printf("IOS7LAB commpage cpus: configured=%u active=%u physical=%u logical=%u\n",
+           *(uint8_t*)_COMM_PAGE_NCPUS,
+           *(uint8_t*)(_COMM_PAGE_BASE_ADDRESS + 0x34),
+           *(uint8_t*)(_COMM_PAGE_BASE_ADDRESS + 0x35),
+           *(uint8_t*)(_COMM_PAGE_BASE_ADDRESS + 0x36));
+#endif
+
+    if(*(uint32_t*)_COMM_PAGE_NCPUS == 0) {
+    	panic("commpage number_of_cpus == 0");
+    }
+
+    return;
+}
+
+void commpage_set_timestamp(uint64_t tbr, uint64_t secs, uint32_t ticks_per_sec)
+{
+    assert(common_page_ptr);
+
+    /* Update the timestamp value. */
+    commpage_timeofday_data_t* tofd = (commpage_timeofday_data_t*)_COMM_PAGE_TIMEOFDAY_DATA;
+
+    tofd->TimeBase = tbr;
+    tofd->TimeStamp_sec = secs;
+    tofd->TimeBaseTicks_per_sec = 0;
+
+    return;
+}
