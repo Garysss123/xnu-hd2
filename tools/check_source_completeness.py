@@ -20,7 +20,7 @@ XNU = ROOT / "xnu"
 SUBSYSTEMS = ("bsd", "iokit", "libkern", "libsa", "osfmk", "pexpert", "security")
 ARCHES = ("arm", "arm64", "i386", "x86_64")
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".s", ".asm"}
-SCAN_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".inc"}
+SCAN_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".h", ".hpp", ".inc"}
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*["<]([^">]+)[">]')
 LOCAL_ANGLE_PREFIXES = (
     "IOKit/", "bsd/", "kern/", "libkern/", "libsa/", "mach/", "machine/",
@@ -124,8 +124,10 @@ def source_path(name: str) -> Path | None:
 
 def resolve_include(name: str, parent: Path) -> Path | None:
     rel = PurePosixPath(name)
-    if rel.is_absolute() or ".." in rel.parts:
+    if rel.is_absolute():
         return None
+    # Relative includes may legitimately use ../; the resolved candidate still
+    # must stay inside the published tree.
     candidates = [parent / Path(*rel.parts)]
     candidates.extend(root / Path(*rel.parts) for root in INCLUDE_ROOTS)
     for candidate in candidates:
@@ -167,6 +169,7 @@ def main() -> int:
             warnings.extend(f"other-architecture source-list gap: {item}" for item in missing)
 
     common_missing: list[tuple[str, str, str]] = []
+    common_sources: list[Path] = []
     common_total = 0
     for subsystem in SUBSYSTEMS:
         filelist = XNU / subsystem / "conf" / "files"
@@ -177,6 +180,8 @@ def main() -> int:
             path = source_path(name)
             if path is None or not path.is_file():
                 common_missing.append((subsystem, name, condition))
+            else:
+                common_sources.append(path)
 
     generated_common = [row for row in common_missing if row[1].startswith("./")]
     conditional_common = [row for row in common_missing if not row[1].startswith("./")]
@@ -187,10 +192,11 @@ def main() -> int:
             f"{len(conditional_common)} conditional/other rows; selection is not inferred"
         )
 
-    # Follow resolvable quoted includes from ARM-specific source-list entries.
-    # Local angle-bracket includes (such as IOKit/storage) are followed too;
-    # unresolved non-local angle includes are toolchain/SDK candidates.
-    queue = deque(arch_sources["arm"])
+    # Follow resolvable quoted includes from present common and ARM source-list
+    # entries. The list parser does not evaluate optional/configuration guards.
+    # Local angle-bracket includes are followed too; unresolved non-local angle
+    # includes are toolchain/SDK candidates.
+    queue = deque(arch_sources["arm"] + common_sources)
     visited: set[Path] = set()
     unresolved: set[tuple[str, int, str]] = set()
     while queue:
@@ -227,11 +233,14 @@ def main() -> int:
         f"Common files: {common_total} source rows; {len(common_missing)} absent "
         f"({len(generated_common)} ./ generator candidates, {len(conditional_common)} conditional/other)"
     )
-    print(f"ARM local include closure: {len(visited)} files visited; {len(unresolved)} unresolved local includes")
+    print(f"Potential ARM+common local include closure: {len(visited)} files visited; {len(unresolved)} unresolved local includes")
     for item in sorted(arch_missing["arm"]):
         print(f"ERROR {item}")
     for item in sorted(warnings):
         print(f"WARN {item}")
+    for subsystem, name, condition in sorted(common_missing):
+        kind = "generated-output" if name.startswith("./") else "conditional-or-other"
+        print(f"WARN common source absent ({kind}): {subsystem}/conf/files: {name} [{condition}]")
     for source, line_number, include_name in sorted(unresolved):
         print(f"WARN unresolved include {source}:{line_number}: {include_name}")
     if hard_errors:
