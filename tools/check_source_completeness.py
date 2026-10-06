@@ -137,6 +137,49 @@ def resolve_include(name: str, parent: Path) -> Path | None:
     return None
 
 
+def strip_comments(text: str) -> str:
+    """Blank C/C++ comments while preserving line numbers and string contents."""
+    chars = list(text)
+    state = "code"
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(chars):
+        pair = chars[index : index + 2]
+        char = chars[index]
+        if state == "line":
+            if char == "\n":
+                state = "code"
+            else:
+                chars[index] = " "
+        elif state == "block":
+            if pair == ["*", "/"]:
+                chars[index] = chars[index + 1] = " "
+                index += 1
+                state = "code"
+            elif char not in "\r\n":
+                chars[index] = " "
+        elif quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        elif pair == ["/", "*"]:
+            chars[index] = chars[index + 1] = " "
+            index += 1
+            state = "block"
+        elif pair == ["/", "/"]:
+            chars[index] = chars[index + 1] = " "
+            index += 1
+            state = "line"
+        index += 1
+    return "".join(chars)
+
+
 def main() -> int:
     hard_errors: list[str] = []
     warnings: list[str] = []
@@ -207,7 +250,8 @@ def main() -> int:
         if source.suffix.lower() not in SCAN_SUFFIXES:
             continue
         try:
-            lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+            text = source.read_text(encoding="utf-8", errors="replace")
+            lines = strip_comments(text).splitlines()
         except OSError:
             continue
         for line_number, line in enumerate(lines, start=1):
