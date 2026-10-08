@@ -10,6 +10,6 @@ This repository contains source only. Apple userland, root filesystems, caches, 
 
 ## Plain Mach-O handoff
 
-The `codex/hd2-genericbooter` branch provides a private raw Mach-O handoff for cLK. The MAGLDR `zImage`/`initrd` trampoline is external packaging; this XNU source tree has no MAGLDR trampoline code to remove. The repository stays source-only. See [BOOT-HANDOFF.md](BOOT-HANDOFF.md) for the available artifact and the unresolved DeviceTree blocker. No boot result is claimed.
+The `codex/hd2-genericbooter` branch documents private raw Mach-O and DeviceTree handoff inputs; it does not contain either binary. The MAGLDR `zImage`/`initrd` trampoline is external packaging; this XNU source tree has no MAGLDR trampoline code to remove. Loader compatibility, including cLK, has not been verified. See [BOOT-HANDOFF.md](BOOT-HANDOFF.md) for the runtime handoff contract and evidence limits. No boot result is claimed.
 
 Existing per-file licenses apply. See `xnu/APPLE_LICENSE`, `xnu/LICENSE`, and `LICENSE-NOTICE.md`. No additional blanket license is assigned to files without a license notice.
