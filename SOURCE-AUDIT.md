@@ -33,3 +33,9 @@ No additional source-authored public dependency was found to restore after revie
 - Other-architecture diagnostics are out of scope for the HD2 target: `files.arm64` refers to absent `osfmk/arm/machroutines.c`, and i386/x86_64 each refer to absent optional `osfmk/kern/etap_map.c`. They were not present in the inspected source base.
 
 The source tree preserves imported XNU and IOKit license notices. The two Leo interface headers have no individual license block; `LICENSE-NOTICE.md` describes the repository's notice policy and assigns no additional blanket license. A complete source-list check and valid manifest do not prove compiler, linker, QEMU, or physical-device success.
+
+## 070 source-input follow-up
+
+A targeted include review of the 070 source and retained-parent files found three source-authored HD2 headers absent from the public tree: `xnu/bsd/dev/arm/ios7leo_signal_metadata037.h`, `xnu/iokit/Drivers/KernelBuiltIn/ARM/AppleARMPlatform/IOS7LeoPresentCost.h`, and `xnu/iokit/Drivers/KernelBuiltIn/ARM/AppleARMPlatform/leo_touch_release_watch.h`. They have been added at their include paths. The two logger headers match source inputs recorded in the 070 build plan; the signal metadata header comes from the earlier HD2 source overlay. No other HD2-specific quoted include edge in this targeted 070 review remains unresolved.
+
+The unresolved-include counts above describe the earlier whole-tree audit; they were not recomputed after the 070 follow-up. Generated/configuration-dependent headers, target configuration, and external toolchain requirements remain. This source review does not establish a clean rebuild or hardware acceptance.
