@@ -10,6 +10,8 @@ python3 tools/check_source_completeness.py
 
 The checker verifies manifest hashes, checks source paths in architecture-specific `files.arm` lists, follows locally resolvable includes from present common and ARM list entries, and reports absent common-list rows and potential unresolved includes. It strips C/C++ comments before scanning, but it does not evaluate target options or preprocessor conditions. A reported include is therefore a candidate reference, not proof of an active missing dependency.
 
+The current counts below were recomputed with a bounded Node.js port of the manifest, source-list, and include-closure logic because Python 3 was not available in the review environment. The Python checker source was updated with the two additional local HD2 include roots, but that script was not executed here.
+
 ## Findings
 
 - All 125 source paths in the checked ARM-specific lists are present. This includes the seven IOKit storage implementation files listed by `xnu/iokit/conf/files.arm`; all 13 matching IOKit storage headers are also included.
