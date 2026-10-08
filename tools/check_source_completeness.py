@@ -33,6 +33,8 @@ INCLUDE_ROOTS = (
     XNU / "libkern",
     XNU / "libsa",
     XNU / "osfmk",
+    XNU / "osfmk" / "kern",
+    XNU / "osfmk" / "ipc",
     XNU / "pexpert",
     XNU / "security",
     XNU / "iokit" / "Drivers" / "KernelBuiltIn" / "ARM" / "AppleARMPlatform",
