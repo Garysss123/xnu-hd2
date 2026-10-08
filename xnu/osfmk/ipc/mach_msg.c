@@ -1,4 +1,3 @@
-/* HTC HD2 integration/publication changes: Garysss123, 2026-10-04. Original license notices are preserved. */
 /*
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
@@ -110,6 +109,14 @@
 #include <security/mac_mach_internal.h>
 
 #include <sys/kdebug.h>
+#if BOARD_CONFIG_QSD8250_LEO
+#include <mach/mach_time.h>
+#include <libsa/string.h>
+extern int proc_pid(struct proc *);
+extern int proc_pidversion(struct proc *);
+extern char *proc_name_address(void *);
+#include "IOS7LeoPreferencesRPC060.h"
+#endif
 #if BOARD_CONFIG_ARMPBA8
 #include <pexpert/pexpert.h>
 #include <libsa/string.h>
@@ -404,6 +411,9 @@ mach_msg_receive_results(void)
 	ipc_kmsg_t        kmsg = self->ith_kmsg;
 	mach_port_seqno_t seqno = self->ith_seqno;
 	mach_msg_trailer_size_t trailer_size;
+#if BOARD_CONFIG_QSD8250_LEO
+    uint32_t leo_rpc060_receive_seq=leo_rpc060_receive_begin(self,mr,mr==MACH_MSG_SUCCESS?kmsg->ikm_header:0);
+#endif
 #if BOARD_CONFIG_ARMPBA8
     int lab_receive = mr == MACH_MSG_SUCCESS && ios7lab_checkin_trace(kmsg->ikm_header);
     int lab_message_id = lab_receive ? kmsg->ikm_header->msgh_id : 0;
@@ -508,6 +518,9 @@ mach_msg_receive_results(void)
 			  kmsg->ikm_header->msgh_size + 
 			  trailer_size);
  out:
+#if BOARD_CONFIG_QSD8250_LEO
+    leo_rpc060_note(leo_rpc060_receive_seq,LEO_RPC060_DONE,(uint32_t)mr,0);
+#endif
 #if BOARD_CONFIG_ARMPBA8
     if (lab_receive)
         printf("IOS7LAB checkin RECEIVE-RESULT pid=%d id=%d result=%x\n", proc_selfpid(), lab_message_id, mr);
@@ -591,6 +604,9 @@ mach_msg_overwrite_trap(
     
 	mach_msg_return_t  mr = MACH_MSG_SUCCESS;
 	vm_map_t map = current_map();
+#if BOARD_CONFIG_QSD8250_LEO
+    uint32_t leo_rpc060_seq=leo_rpc060_begin(args);
+#endif
 #if BOARD_CONFIG_ARMPBA8
     int lab_ls_send = 0, lab_ls_send_id = 0;
     int lab_boundary_send = 0, lab_boundary_send_id = 0;
@@ -603,7 +619,9 @@ mach_msg_overwrite_trap(
 		ipc_kmsg_t kmsg;
 
 		mr = ipc_kmsg_get(msg_addr, send_size, &kmsg);
-        
+#if BOARD_CONFIG_QSD8250_LEO
+        leo_rpc060_note(leo_rpc060_seq,mr==MACH_MSG_SUCCESS?LEO_RPC060_HEADER:LEO_RPC060_DONE,(uint32_t)mr,mr==MACH_MSG_SUCCESS?kmsg->ikm_header:0);
+#endif
 		if (mr != MACH_MSG_SUCCESS)
 			return mr;
 
@@ -632,6 +650,9 @@ mach_msg_overwrite_trap(
                    (unsigned)kmsg->ikm_header->msgh_remote_port, kmsg->ikm_header->msgh_bits, option);
 #endif
 		mr = ipc_kmsg_copyin(kmsg, space, map, option & MACH_SEND_NOTIFY);
+#if BOARD_CONFIG_QSD8250_LEO
+        leo_rpc060_note(leo_rpc060_seq,mr==MACH_MSG_SUCCESS?LEO_RPC060_COPYIN:LEO_RPC060_DONE,(uint32_t)mr,0);
+#endif
 		if (mr != MACH_MSG_SUCCESS) {
 #if BOARD_CONFIG_ARMPBA8
             if (lab_send) printf("IOS7LAB checkin COPYIN-ERROR pid=%d id=%d result=%x\n", proc_selfpid(), lab_send_id, mr);
@@ -662,6 +683,9 @@ mach_msg_overwrite_trap(
         }
 #endif
 		mr = ipc_kmsg_send(kmsg, option & MACH_SEND_TIMEOUT, msg_timeout);
+#if BOARD_CONFIG_QSD8250_LEO
+        leo_rpc060_note(leo_rpc060_seq,mr==MACH_MSG_SUCCESS?LEO_RPC060_SEND:LEO_RPC060_DONE,(uint32_t)mr,0);
+#endif
 #if BOARD_CONFIG_ARMPBA8
         if (lab_send) printf("IOS7LAB checkin SEND-RESULT pid=%d id=%d result=%x\n", proc_selfpid(), lab_send_id, mr);
         if (lab_ls_send) printf("IOS7LAB LSIPC SEND-RESULT pid=%d id=%d result=%x\n", proc_selfpid(), lab_ls_send_id, mr);
@@ -673,6 +697,9 @@ mach_msg_overwrite_trap(
 		if (mr != MACH_MSG_SUCCESS) {
 			mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
 			(void) ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size);
+#if BOARD_CONFIG_QSD8250_LEO
+            leo_rpc060_note(leo_rpc060_seq,LEO_RPC060_DONE,(uint32_t)mr,0);
+#endif
 			return mr;
 		}
 	}
@@ -690,6 +717,9 @@ mach_msg_overwrite_trap(
 
 		mr = ipc_mqueue_copyin(space, rcv_name, &mqueue, &object);
 		if (mr != MACH_MSG_SUCCESS) {
+#if BOARD_CONFIG_QSD8250_LEO
+            leo_rpc060_note(leo_rpc060_seq,LEO_RPC060_DONE,(uint32_t)mr,0);
+#endif
 			return mr;
 		}
 		/* hold ref for object */
@@ -713,12 +743,18 @@ mach_msg_overwrite_trap(
 		self->ith_receiver_name = MACH_PORT_NULL;
 		self->ith_continuation = thread_syscall_return;
 
+#if BOARD_CONFIG_QSD8250_LEO
+        leo_rpc060_note(leo_rpc060_seq,LEO_RPC060_WAIT,MACH_MSG_SUCCESS,0);
+#endif
 		ipc_mqueue_receive(mqueue, option, rcv_size, msg_timeout, THREAD_ABORTSAFE);
 		if ((option & MACH_RCV_TIMEOUT) && msg_timeout == 0)
 			thread_poll_yield(self);
 		return mach_msg_receive_results();
 	}
 
+#if BOARD_CONFIG_QSD8250_LEO
+    leo_rpc060_note(leo_rpc060_seq,LEO_RPC060_DONE,MACH_MSG_SUCCESS,0);
+#endif
 	return MACH_MSG_SUCCESS;
 }
 

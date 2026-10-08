@@ -164,7 +164,7 @@ int leo_log_locate(const struct fl32_io *io,const struct fl32_limits *lim,struct
  memset(w,0,sizeof(*w));w->fat_lba[0]=w->fat_lba[1]=UINT64_MAX;struct volume v;memset(&v,0,sizeof(v));int r=volume_read(io,lim,w,&v);if(r)return r;
  if(v.clusters>LEO_LOG_CLUSTER_CAP||owner_bytes<((uint64_t)v.clusters+2U+7U)/8U)return FL32_LIMIT;
  static const uint8_t dirname[11]={'I','O','S','7',' ',' ',' ',' ',' ',' ',' '};
- static const uint8_t filename[11]={'B','O','O','T','L','O','G','8','B','I','N'};
+ static const uint8_t filename[11]={'B','O','O','T','L','G','4','3','B','I','N'};
  uint32_t dir=0,size=0,first=0;unsigned seen_dirs=0;
  r=find_name(io,lim,w,&v,v.root,dirname,1,&seen_dirs,&dir,&size);if(r)return r;
  r=find_name(io,lim,w,&v,dir,filename,0,&seen_dirs,&first,&size);if(r)return r;

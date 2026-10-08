@@ -1,4 +1,3 @@
-/* HTC HD2 integration/publication changes: Garysss123, 2026-10-04. Original license notices are preserved. */
 /*
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
@@ -80,6 +79,15 @@
 #include <mach/rpc.h>
 
 #include <security/mac_mach_internal.h>
+#if BOARD_CONFIG_QSD8250_LEO
+#include <mach/mach_time.h>
+#include <arm/proc_reg.h>
+#include "IOS7LeoThreadState061.h"
+#include <mach/thread_status.h>
+#include <arm/mp.h>
+#include <arm/cpu_data.h>
+#include "IOS7LeoQueuedState063.h"
+#endif
 
 void			act_abort(thread_t);
 void			install_special_handler_locked(thread_t);
@@ -427,15 +435,28 @@ thread_get_state(
 	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
+#if BOARD_CONFIG_QSD8250_LEO
+    uint32_t leo_ts061_call=leo_ts061_begin(thread,flavor,*state_count);
+#endif
 	thread_mtx_lock(thread);
 
 	if (thread->active) {
 		if (thread != current_thread()) {
+#if BOARD_CONFIG_QSD8250_LEO
+            if(leo_queued_state063_try(thread,flavor,state,state_count,&result))
+                goto leo_queued_state063_done;
+#endif
 			thread_hold(thread);
+#if BOARD_CONFIG_QSD8250_LEO
+            leo_ts061_phase(leo_ts061_call,thread,LEO_TS061_HELD,0);
+#endif
 
 			thread_mtx_unlock(thread);
 
 			if (thread_stop(thread)) {
+#if BOARD_CONFIG_QSD8250_LEO
+                leo_ts061_phase(leo_ts061_call,thread,LEO_TS061_STOPPED,0);
+#endif
 				thread_mtx_lock(thread);
 				result = machine_thread_get_state(
 										thread, flavor, state, state_count);
@@ -444,6 +465,9 @@ thread_get_state(
 			else {
 				thread_mtx_lock(thread);
 				result = KERN_ABORTED;
+#if BOARD_CONFIG_QSD8250_LEO
+                leo_ts061_phase(leo_ts061_call,thread,LEO_TS061_INTERRUPTED,result);
+#endif
 			}
 
 			thread_release(thread);
@@ -455,8 +479,14 @@ thread_get_state(
 	else
 		result = KERN_TERMINATED;
 
+#if BOARD_CONFIG_QSD8250_LEO
+leo_queued_state063_done:
+#endif
 	thread_mtx_unlock(thread);
 
+#if BOARD_CONFIG_QSD8250_LEO
+    leo_ts061_phase(leo_ts061_call,thread,LEO_TS061_DONE,result);
+#endif
 	return (result);
 }
 

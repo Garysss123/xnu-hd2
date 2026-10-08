@@ -270,15 +270,25 @@ ios7leo_installd_fault(thread_t thread, const abort_information_context_t *ctx,
 #endif
 /* IOS7LEO_INSTALLD_WITNESS_END */
 
+#if BOARD_CONFIG_QSD8250_LEO
+#include "ios7leo_data_abort037.h"
+#include "IOS7LeoAppFault057.h"
+#endif
+
 static int __abort_count = 0;
 void sleh_abort(void *context, int reason)
 {
 #if BOARD_CONFIG_QSD8250_LEO
     kern_return_t leo_installd_fault_result=KERN_SUCCESS;
     boolean_t leo_installd_failed=FALSE;
+    ios7leo037_data_snapshot_t leo037_data_snapshot;
+    kern_return_t leo037_data_error=KERN_SUCCESS;
+    uint32_t leo037_data_bad_address=0U;
+    leo037_data_snapshot.valid=0U;
 #endif
 #if defined(BOARD_CONFIG_QSD8250_LEO)
     kern_return_t ios7lab_exception_code=KERN_SUCCESS;
+    uint32_t leo037_prefetch_bad_address=0U;
 #endif
     uint32_t dfsr = 0, dfar = 0, ifsr = 0, ifar = 0, cpsr, exception_type =
         0, exception_subcode = 0;
@@ -295,9 +305,18 @@ void sleh_abort(void *context, int reason)
     if (reason == SLEH_ABORT_TYPE_DATA_ABORT) {
         dfsr = arm_ctx->fsr;
         dfar = arm_ctx->far;
+#if BOARD_CONFIG_QSD8250_LEO
+        if((arm_ctx->cpsr&0x1fU)==0x10U) {
+            ios7leo037_data_entry(&leo037_data_snapshot,arm_ctx,thread);
+            leo037_data_bad_address=dfar;
+        }
+#endif
     } else if (reason == SLEH_ABORT_TYPE_PREFETCH_ABORT) {
         ifsr = arm_ctx->fsr;
         ifar = arm_ctx->far;
+#if BOARD_CONFIG_QSD8250_LEO
+        leo037_prefetch_bad_address=arm_ctx->pc;
+#endif
     } else {
         sleh_fatal_exception(arm_ctx, "sleh_abort: weird abort");
     }
@@ -520,6 +539,19 @@ void sleh_abort(void *context, int reason)
                          proc_name_address(thread->task->bsd_info),
                          proc_pid(thread->task->bsd_info), arm_ctx->pc, map,
                          map->pmap, ifsr_to_human(ifsr));
+#if BOARD_CONFIG_QSD8250_LEO
+                    {
+                        const abort_information_context_t *diag =
+                            (reason == SLEH_ABORT_TYPE_DATA_ABORT && leo037_data_snapshot.valid)
+                            ? &leo037_data_snapshot.entry : arm_ctx;
+                        printf("APPCTX057 EXC_BAD_ACCESS PID=%d SRC=%s PC=%08x LR=%08x SP=%08x R0_R3=%08x,%08x,%08x,%08x PSR=%08x FSR=%08x FAR=%08x RESULT=%x\n",
+                            proc_pid(thread->task->bsd_info),
+                            (reason == SLEH_ABORT_TYPE_DATA_ABORT && leo037_data_snapshot.valid) ? "ENTRY" : "CURRENT",
+                            (unsigned)diag->pc,(unsigned)diag->lr,(unsigned)diag->sp,
+                            (unsigned)diag->r[0],(unsigned)diag->r[1],(unsigned)diag->r[2],(unsigned)diag->r[3],
+                            (unsigned)diag->cpsr,(unsigned)diag->fsr,(unsigned)diag->far,(unsigned)code);
+                    }
+#endif
                     printf("Thread has ARM register state:\n"
                            "    r0: 0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
                            "    r4: 0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
@@ -572,6 +604,9 @@ void sleh_abort(void *context, int reason)
 #if BOARD_CONFIG_QSD8250_LEO
                     leo_installd_fault_result=code;
                     leo_installd_failed=TRUE;
+                    leo037_data_error=code;
+                    if(leo037_data_snapshot.valid)
+                        ios7leo037_data_after_vm(&leo037_data_snapshot,arm_ctx,thread);
 #endif
 #if BOARD_CONFIG_ARMPBA8
                     /* Bounded ordinary crash backtrace for the lab's UI process.
@@ -607,6 +642,19 @@ void sleh_abort(void *context, int reason)
                          proc_name_address(thread->task->bsd_info),
                          proc_pid(thread->task->bsd_info), dfar, map, map->pmap,
                          ifsr_to_human(dfsr));
+#if BOARD_CONFIG_QSD8250_LEO
+                    {
+                        const abort_information_context_t *diag =
+                            (reason == SLEH_ABORT_TYPE_DATA_ABORT && leo037_data_snapshot.valid)
+                            ? &leo037_data_snapshot.entry : arm_ctx;
+                        printf("APPCTX057 EXC_BAD_ACCESS PID=%d SRC=%s PC=%08x LR=%08x SP=%08x R0_R3=%08x,%08x,%08x,%08x PSR=%08x FSR=%08x FAR=%08x RESULT=%x\n",
+                            proc_pid(thread->task->bsd_info),
+                            (reason == SLEH_ABORT_TYPE_DATA_ABORT && leo037_data_snapshot.valid) ? "ENTRY" : "CURRENT",
+                            (unsigned)diag->pc,(unsigned)diag->lr,(unsigned)diag->sp,
+                            (unsigned)diag->r[0],(unsigned)diag->r[1],(unsigned)diag->r[2],(unsigned)diag->r[3],
+                            (unsigned)diag->cpsr,(unsigned)diag->fsr,(unsigned)diag->far,(unsigned)code);
+                    }
+#endif
                     printf("Thread has ARM register state:\n"
                            "    r0: 0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
                            "    r4: 0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
@@ -650,8 +698,24 @@ void sleh_abort(void *context, int reason)
         if(leo_installd_failed)
             ios7leo_installd_fault(thread,arm_ctx,leo_installd_fault_result);
         if (exception_type == EXC_BAD_ACCESS &&
+            reason == SLEH_ABORT_TYPE_DATA_ABORT &&
+            leo037_data_snapshot.valid &&
+            leo037_data_error != KERN_SUCCESS &&
+            leo037_data_error != KERN_ABORTED) {
+            /* Mach BAD_ACCESS code is the actual VM failure; subcode is the
+             * original bad address saved before VM fault handling.  This
+             * repairs delivery metadata, not the initial data access. */
+            ios7leo037_failed_data_witness(thread,&leo037_data_snapshot,
+                leo037_data_error,leo037_data_bad_address);
+            ios7leo057_failed_app_data(thread,&leo037_data_snapshot,
+                leo037_data_error,leo037_data_bad_address);
+            ios7leo037_publish_exception_state(thread,arm_ctx,
+                SLEH_ABORT_TYPE_DATA_ABORT,
+                leo037_data_snapshot.entry.fsr,leo037_data_bad_address);
+            doexception(exception_type,leo037_data_error,leo037_data_bad_address);
+        } else if (exception_type == EXC_BAD_ACCESS &&
             reason == SLEH_ABORT_TYPE_PREFETCH_ABORT &&
-            (arm_ctx->cpsr & 0x1fU) == 0x10U &&
+            cpsr == 0x10U &&
             ios7lab_exception_code != KERN_SUCCESS &&
             ios7lab_exception_code != KERN_ABORTED) {
             /* EXC_BAD_ACCESS code is the kern_return_t and subcode is the
@@ -665,7 +729,9 @@ void sleh_abort(void *context, int reason)
                 (void)ios7lab_fault_witness_capture(thread, arm_ctx, ifsr, ifar,
                                                      ios7lab_exception_code,
                                                      0U, 0U);
-            doexception(exception_type, ios7lab_exception_code, arm_ctx->pc);
+            ios7leo037_publish_exception_state(thread,arm_ctx,
+                SLEH_ABORT_TYPE_PREFETCH_ABORT,ifsr,ifar);
+            doexception(exception_type, ios7lab_exception_code, leo037_prefetch_bad_address);
         } else
 #endif
         doexception(exception_type, exception_subcode, 0);

@@ -1,4 +1,3 @@
-/* HTC HD2 integration/publication changes: Garysss123, 2026-10-04. Original license notices are preserved. */
 #if defined(BOARD_CONFIG_QSD8250_LEO)
 #include "leo_user_frontier.h"
 #endif
@@ -98,6 +97,10 @@
 #include <kern/syscall_subr.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#if BOARD_CONFIG_QSD8250_LEO
+#include <arm/proc_reg.h>
+#include "IOS7LeoThreadState061API.h"
+#endif
 #include <kern/wait_queue.h>
 #include <kern/ledger.h>
 
@@ -1313,6 +1316,9 @@ thread_stop(
 
 	while (thread->state & TH_SUSP) {
 		thread->wake_active = TRUE;
+#if BOARD_CONFIG_QSD8250_LEO
+        ios7leo_threadstate061_locked(thread,LEO_TS061_WAIT_SUSP);
+#endif
 		thread_unlock(thread);
 
 		wresult = assert_wait(&thread->wake_active, THREAD_ABORTSAFE);
@@ -1321,6 +1327,9 @@ thread_stop(
 
 		if (wresult == THREAD_WAITING)
 			wresult = thread_block(THREAD_CONTINUE_NULL);
+#if BOARD_CONFIG_QSD8250_LEO
+        ios7leo_threadstate061_return(thread,(uint32_t)wresult);
+#endif
 
 		if (wresult != THREAD_AWAKENED)
 			return (FALSE);
@@ -1339,6 +1348,9 @@ thread_stop(
 			cause_ast_check(processor);
 
 		thread->wake_active = TRUE;
+#if BOARD_CONFIG_QSD8250_LEO
+        ios7leo_threadstate061_locked(thread,LEO_TS061_WAIT_RUN);
+#endif
 		thread_unlock(thread);
 
 		wresult = assert_wait(&thread->wake_active, THREAD_ABORTSAFE);
@@ -1347,6 +1359,9 @@ thread_stop(
 
 		if (wresult == THREAD_WAITING)
 			wresult = thread_block(THREAD_CONTINUE_NULL);
+#if BOARD_CONFIG_QSD8250_LEO
+        ios7leo_threadstate061_return(thread,(uint32_t)wresult);
+#endif
 
 		if (wresult != THREAD_AWAKENED) {
 			thread_unstop(thread);
@@ -1384,6 +1399,9 @@ thread_unstop(
 
 	if ((thread->state & (TH_RUN|TH_WAIT|TH_SUSP)) == TH_SUSP) {
 		thread->state &= ~TH_SUSP;
+#if BOARD_CONFIG_QSD8250_LEO
+        ios7leo_threadstate061_locked(thread,LEO_TS061_UNSTOP_CLEAR);
+#endif
 		thread_unblock(thread, THREAD_AWAKENED);
 
 		thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
@@ -1391,8 +1409,14 @@ thread_unstop(
 	else
 	if (thread->state & TH_SUSP) {
 		thread->state &= ~TH_SUSP;
+#if BOARD_CONFIG_QSD8250_LEO
+        ios7leo_threadstate061_locked(thread,LEO_TS061_UNSTOP_CLEAR);
+#endif
 
 		if (thread->wake_active) {
+#if BOARD_CONFIG_QSD8250_LEO
+            ios7leo_threadstate061_locked(thread,LEO_TS061_UNSTOP_WAKE);
+#endif
 			thread->wake_active = FALSE;
 			thread_unlock(thread);
 
@@ -2413,6 +2437,9 @@ thread_dispatch(
 				thread->reason = AST_NONE;
 
 				if (thread->wake_active) {
+#if BOARD_CONFIG_QSD8250_LEO
+                    ios7leo_threadstate061_locked(thread,LEO_TS061_DISPATCH_RUN_WAKE);
+#endif
 					thread->wake_active = FALSE;
 					thread_unlock(thread);
 
@@ -2439,6 +2466,9 @@ thread_dispatch(
 				}
 
 				thread->state &= ~TH_RUN;
+#if BOARD_CONFIG_QSD8250_LEO
+                ios7leo_threadstate061_locked(thread,LEO_TS061_DISPATCH_CLEAR_RUN);
+#endif
 
 				if (thread->sched_mode == TH_MODE_TIMESHARE)
 					sched_share_decr();
@@ -2447,6 +2477,9 @@ thread_dispatch(
 				(*thread->sched_call)(SCHED_CALL_BLOCK, thread);
 
 				if (thread->wake_active) {
+#if BOARD_CONFIG_QSD8250_LEO
+                    ios7leo_threadstate061_locked(thread,LEO_TS061_DISPATCH_WAIT_WAKE);
+#endif
 					thread->wake_active = FALSE;
 					thread_unlock(thread);
 

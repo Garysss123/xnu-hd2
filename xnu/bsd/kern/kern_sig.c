@@ -1,4 +1,3 @@
-/* HTC HD2 integration/publication changes: Garysss123, 2026-10-04. Original license notices are preserved. */
 /*
  * Copyright (c) 1995-2007 Apple Inc. All rights reserved.
  *
@@ -101,6 +100,9 @@
 
 #include <sys/vm.h>
 #include <sys/user.h>		/* for coredump */
+#if BOARD_CONFIG_QSD8250_LEO
+#include "../dev/arm/ios7leo_signal_metadata037.h"
+#endif
 #include <kern/ast.h>		/* for APC support */
 #include <kern/lock.h>
 #include <kern/task.h>		/* extern void   *get_bsdtask_info(task_t); */
@@ -113,6 +115,10 @@
 #include <libkern/OSAtomic.h>
 
 #include <sys/sdt.h>
+#if BOARD_CONFIG_QSD8250_LEO
+#include <mach/mach_time.h>
+#include "IOS7LeoPreferencesKill059.h"
+#endif
 
 #if BOARD_CONFIG_ARMPBA8
 #include <libkern/OSAtomic.h>
@@ -1440,8 +1446,15 @@ kill(proc_t cp, struct kill_args *uap, __unused int32_t *retval)
         if (uap->signum)
             ios7lab_preferences_kill_syscall_note(cp, p, uap->signum);
 #endif
+#if BOARD_CONFIG_QSD8250_LEO
+        /* Same referenced target after the original permission check. */
+        leo_prefkill059_note(1U,cp,p,uap->signum);
+#endif
 		if (uap->signum)
 			psignal(p, uap->signum);
+#if BOARD_CONFIG_QSD8250_LEO
+        leo_prefkill059_note(3U,cp,p,uap->signum);
+#endif
 		proc_rele(p);
 		return (0);
 	}
@@ -1683,6 +1696,11 @@ threadsignal(thread_t sig_actthread, int signum, mach_exception_code_t code)
 
 	uth->uu_siglist |= mask;
 	uth->uu_code = code;
+#if BOARD_CONFIG_QSD8250_LEO
+    /* Only threadsignal's Mach BAD_ACCESS route creates this origin. */
+    if (ios7leo_fault_origin037(uth->uu_exception, signum) != 0)
+        uth->uu_cursig = (char)signum;
+#endif
 	proc_unlock(p);
 
 	/* mark on process as well */
@@ -1789,6 +1807,9 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 
 	if ((sig_task == TASK_NULL) || is_kerneltask(sig_task))
 		return;
+#if BOARD_CONFIG_QSD8250_LEO
+    leo_prefkill059_note(2U,(proc_t)get_bsdtask_info(current_task()),sig_proc,signum);
+#endif
 #if BOARD_CONFIG_ARMPBA8
     if (ios7lab_preferences_lifecycle_target(sig_proc))
         ios7lab_preferences_lifecycle_note(1, sig_proc->p_pid,
@@ -1908,6 +1929,11 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 		uth->uu_siglist &= ~contsigmask;
 	}
 
+#if BOARD_CONFIG_QSD8250_LEO
+    /* An ordinary raise must not resurrect consumed/ignored fault metadata. */
+    uth->uu_cursig = ios7leo_ordinary_origin037(uth->uu_cursig, signum,
+        (uint32_t)uth->uu_siglist);
+#endif
 	uth->uu_siglist |= mask;
 	/* 
 	 * Repost AST incase sigthread has processed 
@@ -2683,7 +2709,13 @@ stop(proc_t p, proc_t parent)
 		wakeup((caddr_t)parent);
 		proc_list_unlock();
 	}
+#if BOARD_CONFIG_QSD8250_LEO
+    leo_prefkill059_note(4U,(proc_t)get_bsdtask_info(current_task()),p,p->p_xstat);
+#endif
 	(void) task_suspend(p->task);	/*XXX*/
+#if BOARD_CONFIG_QSD8250_LEO
+    leo_prefkill059_note(5U,(proc_t)get_bsdtask_info(current_task()),p,p->p_xstat);
+#endif
 }
 
 /*

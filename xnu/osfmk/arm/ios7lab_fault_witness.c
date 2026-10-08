@@ -9,6 +9,18 @@
 #include <libsa/string.h>
 
 #include "ios7lab_fault_witness.h"
+#include <mach/mach_time.h>
+#include <kern/clock.h>
+/* Exact opaque APIs from bsd/sys/proc.h254,258,271,302-303.
+ * Keep the established ARM TU include order; no BSD layout/type guessing. */
+typedef struct proc *leo_prefs_proc_t;
+extern leo_prefs_proc_t proc_find(int);
+extern int proc_rele(leo_prefs_proc_t);
+extern int proc_exiting(leo_prefs_proc_t);
+extern task_t proc_task(leo_prefs_proc_t);
+extern int proc_pidversion(leo_prefs_proc_t);
+#include "IOS7LeoPreferencesWait058.h"
+#include "IOS7LeoThreadState061API.h"
 
 #define IOS7LAB_COPY_NOT_ATTEMPTED 0xffffffffU
 #define IOS7LAB_USER_TOP            0x40000000U
@@ -180,10 +192,12 @@ ios7lab_irq_observe(void *context)
         ios7lab_sat_inc(&state->unknown_irqs, &state->saturated);
         return;
     }
+    ios7leo_threadstate061_irq(thread, saved);
     if ((saved->cpsr & 0x1fU) != 0x10U) {
         ios7lab_sat_inc(&state->kernel_irqs, &state->saturated);
         return;
     }
+    leo_prefs058_irq(thread, saved);
     ios7lab_sat_inc(&state->user_irqs, &state->saturated);
     ios7lab_irq_record_job(state, thread, saved);
     if (!ios7lab_proc_is_springboard(thread))

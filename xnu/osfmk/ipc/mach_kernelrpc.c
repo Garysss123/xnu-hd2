@@ -1,4 +1,3 @@
-/* HTC HD2 integration/publication changes: Garysss123, 2026-10-04. Original license notices are preserved. */
 /*
  * Copyright (c) 2011 Apple Inc. All rights reserved.
  *
@@ -273,6 +272,85 @@ done:
 #endif
 
 
+/* IOS7LEO_VM_RANGE054_BEGIN */
+#if BOARD_CONFIG_QSD8250_LEO
+#include "ios7lab_vm_range_wire.h"
+#include "IOS7LeoVmRangeObservation.h"
+#include <machine/machine_routines.h>
+/* Only RAM counters here. Existing SD worker emits three finite snapshots.
+ * Successful nonzero requests are backend results, not resident-RAM proof. */
+static volatile uint32_t leoVmRangeCounts[12];
+static void ios7leo_vm_range_record(unsigned int protect,
+    const struct ios7lab_vm_range_wire *wire, unsigned int protection,
+    int result, int called)
+{
+    boolean_t enabled=ml_set_interrupts_enabled(FALSE);
+    unsigned int callslot=protect?2:0;
+    if(leoVmRangeCounts[callslot]!=UINT32_MAX)++leoVmRangeCounts[callslot];
+    if(called && result==KERN_SUCCESS && leoVmRangeCounts[callslot+1]!=UINT32_MAX)
+        ++leoVmRangeCounts[callslot+1];
+    if(!called && (wire->address_high||wire->size_high) && result==KERN_INVALID_ARGUMENT && leoVmRangeCounts[4]!=UINT32_MAX)++leoVmRangeCounts[4];
+    if(!called && result==MACH_SEND_INVALID_DEST && leoVmRangeCounts[5]!=UINT32_MAX)++leoVmRangeCounts[5];
+    if(called && result!=KERN_SUCCESS && leoVmRangeCounts[6]!=UINT32_MAX)++leoVmRangeCounts[6];
+    if(!protect && called && result==KERN_SUCCESS && wire->size_low && leoVmRangeCounts[7]!=UINT32_MAX)++leoVmRangeCounts[7];
+    leoVmRangeCounts[8]=wire->address_low;leoVmRangeCounts[9]=wire->size_low;
+    leoVmRangeCounts[10]=protection;leoVmRangeCounts[11]=(uint32_t)result;
+    ml_set_interrupts_enabled(enabled);
+}
+void ios7leo_vm_range_observe(LeoVmRangeObservation *out)
+{
+    if(!out||out->version!=1)return;
+    boolean_t enabled=ml_set_interrupts_enabled(FALSE);
+    uint32_t *words=&out->deallocate_calls;
+    for(unsigned int i=0;i<12;i++)words[i]=leoVmRangeCounts[i];
+    out->known=1;ml_set_interrupts_enabled(enabled);
+}
+static int ios7leo_vm_deallocate64(struct ios7lab_vm_range_wire *wire)
+{
+    uint32_t address = 0, size = 0;
+    task_t task = port_name_to_task(wire->target);
+    int rv = MACH_SEND_INVALID_DEST, called = 0;
+    if (task != current_task()) goto done;
+    if (!ios7lab_vm_range32(wire, &address, &size)) {
+        rv = KERN_INVALID_ARGUMENT;
+        goto done;
+    }
+    called = 1;
+    rv = mach_vm_deallocate(task->map, (mach_vm_address_t)address, (mach_vm_size_t)size);
+done:
+    ios7leo_vm_range_record(0, wire, 0, rv, called);
+    if (task) task_deallocate(task);
+    return rv;
+}
+
+static int ios7leo_vm_protect64(struct ios7lab_vm_protect_wire *wire)
+{
+    struct ios7lab_vm_range_wire range;
+    uint32_t address = 0, size = 0;
+    task_t task = port_name_to_task(wire->target);
+    int rv = MACH_SEND_INVALID_DEST, called = 0;
+    range.target = wire->target;
+    range.address_low = wire->address_low;
+    range.address_high = wire->address_high;
+    range.size_low = wire->size_low;
+    range.size_high = wire->size_high;
+    if (task != current_task()) goto done;
+    if (!ios7lab_vm_range32(&range, &address, &size)) {
+        rv = KERN_INVALID_ARGUMENT;
+        goto done;
+    }
+    called = 1;
+    rv = mach_vm_protect(task->map, (mach_vm_address_t)address, (mach_vm_size_t)size,
+        (boolean_t)wire->set_maximum, (vm_prot_t)wire->new_protection);
+done:
+    ios7leo_vm_range_record(1, &range, wire->new_protection, rv, called);
+    if (task) task_deallocate(task);
+    return rv;
+}
+
+#endif
+/* IOS7LEO_VM_RANGE054_END */
+
 /* IOS7LEO_VM_BEGIN */
 #if BOARD_CONFIG_QSD8250_LEO
 #include <mach/vm_statistics.h>
@@ -355,6 +433,9 @@ done:
 int
 _kernelrpc_mach_vm_deallocate_trap(struct _kernelrpc_mach_vm_deallocate_args *args)
 {
+#if BOARD_CONFIG_QSD8250_LEO
+    return ios7leo_vm_deallocate64((struct ios7lab_vm_range_wire *)args);
+#endif
 	task_t task = port_name_to_task(args->target);
 	int rv = MACH_SEND_INVALID_DEST;
 
@@ -372,6 +453,9 @@ done:
 int
 _kernelrpc_mach_vm_protect_trap(struct _kernelrpc_mach_vm_protect_args *args)
 {
+#if BOARD_CONFIG_QSD8250_LEO
+    return ios7leo_vm_protect64((struct ios7lab_vm_protect_wire *)args);
+#endif
 	task_t task = port_name_to_task(args->target);
 	int rv = MACH_SEND_INVALID_DEST;
 

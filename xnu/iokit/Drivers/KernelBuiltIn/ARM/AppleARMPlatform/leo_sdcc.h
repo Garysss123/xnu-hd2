@@ -1,6 +1,7 @@
 #ifndef IOS7LEO_SDCC_H
 #define IOS7LEO_SDCC_H
 #include <stdint.h>
+#include "IOS7LeoSDFault.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,6 +22,11 @@ struct leo_sd_io {
  uint64_t (*now_ns)(void *);
  int (*delay_us)(void *,uint32_t);
  uint32_t poll_bound;
+ /* Both callbacks are installed by the native owner. Only bounded AVAILABLE
+  * FIFO words are handled under this token, never clock/empty waits. */
+ uint32_t (*enter_pio)(void *);
+ void (*leave_pio)(void *,uint32_t);
+
 };
 struct leo_sd_card {
  struct leo_sd_io io;
@@ -32,6 +38,7 @@ struct leo_sd_card {
  int high_capacity,csd_write_protected,initialized,faulted,rpc_uncertain;
  uint32_t write_attempts,write_words,write_completed;
  int write_result;
+ LeoSDFault first_fault;
 };
 void leo_sd_init(struct leo_sd_card *,const struct leo_sd_io *);
 int leo_sd_start(struct leo_sd_card *);
