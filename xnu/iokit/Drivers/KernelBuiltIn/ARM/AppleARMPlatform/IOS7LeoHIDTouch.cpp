@@ -1,3 +1,4 @@
+/* HTC HD2 integration/publication changes: Garysss123, 2026-10-04. Original license notices are preserved. */
 #if defined(BOARD_CONFIG_QSD8250_LEO)
 /* Real Type2A controller reports through the original iOS7 IOHIDLib queue.
  * PL050, synthetic contacts, buttons and userland routing helpers are absent. */
@@ -18,6 +19,7 @@
 #include "IOS7LeoTouchTransport.h"
 #include "IOS7LeoTouchWire.h"
 #include "IOS7LeoTouchObservation.h"
+#include "IOS7LeoTouchQueueProtocol.h"
 extern "C" {
 #include <mach/mach_time.h>
 extern int proc_selfpid(void);
@@ -41,12 +43,25 @@ extern "C" uint32_t ios7leo_touch_observe(LeoTouchObservation *out)
  OSMemoryBarrier();leo_touch_observer_guard=0;return out->known?1U:0U;
 }
 static void leo_touch_inc(unsigned *value) {if(*value!=UINT32_MAX)++*value;}
+/* HD2 is ARMv7. Keep the compiler clobber explicit rather than depending on
+ * the legacy OSAtomic.h _ARM_ARCH_7 selection and its older CP15 variant. */
+static void leo_touch_queue_barrier(void *) {__asm__ volatile("dmb sy" ::: "memory");}
+static void leo_touch_queue_copy(void *,void *destination,const void *source,uint32_t bytes)
+{memcpy(destination,source,bytes);}
 
 class IOS7LeoHIDQueue : public IOSharedDataQueue {
  OSDeclareDefaultStructors(IOS7LeoHIDQueue)
+ unsigned notifyCalls,notifyOK,notifyBusy,notifyErrors,notifyNoPort,lastNotifyResult,lastNotifyTail,lastEnqueueFlags;
+ bool lastNotifyValid;
 public:
+ virtual Boolean initWithCapacity(UInt32 size) {
+  notifyCalls=notifyOK=notifyBusy=notifyErrors=notifyNoPort=lastNotifyTail=lastEnqueueFlags=0;
+  lastNotifyResult=UINT32_MAX;lastNotifyValid=false;return IOSharedDataQueue::initWithCapacity(size);
+ }
  UInt32 readerHead(void) const {return dataQueue?dataQueue->head:0;}
  UInt32 writerTail(void) const {return dataQueue?dataQueue->tail:0;}
+ UInt32 enqueueNotificationFlags(void) const {return lastEnqueueFlags;}
+ bool portPresent(void) const {return notifyMsg && ((mach_msg_header_t *)notifyMsg)->msgh_remote_port!=MACH_PORT_NULL;}
  bool sane(void) const {
   return dataQueue && dataQueue->queueSize==4096 &&
    dataQueue->head<=4096 && dataQueue->tail<=4096 &&
@@ -54,6 +69,36 @@ public:
  }
  /* Only while the exclusive consumer is opening/closing under service lock. */
  void discardAll(void) {if(dataQueue){dataQueue->head=dataQueue->tail=0;OSMemoryBarrier();}}
+ virtual Boolean enqueue(void *data,UInt32 bytes) {
+  lastEnqueueFlags=0;if(!dataQueue)return false;
+  LeoTouchQueueHooks hooks={0,leo_touch_queue_barrier,leo_touch_queue_copy};
+  uint32_t flags=0;
+  if(!leo_touch_queue_enqueue(&dataQueue->head,&dataQueue->tail,dataQueue->queueSize,
+   (unsigned char *)dataQueue->queue,data,bytes,&hooks,&flags))return false;
+  lastEnqueueFlags=flags;
+  if(flags&LEO_TOUCH_UP_NOTIFY_SELECTED)sendDataAvailableNotification();
+  return true;
+ }
+ virtual void sendDataAvailableNotification(void) {
+  leo_touch_inc(&notifyCalls);lastNotifyTail=writerTail();lastNotifyResult=UINT32_MAX;lastNotifyValid=false;
+  mach_msg_header_t *message=(mach_msg_header_t *)notifyMsg;
+  if(!message || !message->msgh_remote_port){leo_touch_inc(&notifyNoPort);return;}
+  lastEnqueueFlags|=LEO_TOUCH_UP_NOTIFY_PORT;
+  kern_return_t result=mach_msg_send_from_kernel_proper(message,message->msgh_size);
+  lastNotifyResult=(UInt32)result;lastNotifyValid=true;
+  if(result==MACH_MSG_SUCCESS){leo_touch_inc(&notifyOK);lastEnqueueFlags|=LEO_TOUCH_UP_NOTIFY_OK;}
+  else if(result==MACH_SEND_TIMED_OUT){leo_touch_inc(&notifyBusy);lastEnqueueFlags|=LEO_TOUCH_UP_NOTIFY_BUSY;}
+  else{leo_touch_inc(&notifyErrors);lastEnqueueFlags|=LEO_TOUCH_UP_NOTIFY_ERROR;}
+ }
+ void snapshot(LeoTouchObservation *out) const {
+  out->notify_calls=notifyCalls;out->notify_ok=notifyOK;out->notify_busy=notifyBusy;
+  out->notify_errors=notifyErrors;out->notify_no_port=notifyNoPort;
+  out->last_notify_result=lastNotifyResult;out->last_notify_tail=lastNotifyTail;
+  if(portPresent())out->observation_flags|=LEO_TOUCH_OBS_PORT_PRESENT;
+  if(lastNotifyValid)out->observation_flags|=LEO_TOUCH_OBS_NOTIFY_RESULT_VALID;
+  if(notifyCalls==UINT32_MAX || notifyOK==UINT32_MAX || notifyBusy==UINT32_MAX ||
+   notifyErrors==UINT32_MAX || notifyNoPort==UINT32_MAX)out->observation_flags|=LEO_TOUCH_OBS_COUNTER_SATURATED;
+ }
 };
 class IOS7LeoHIDTouchClient;
 /* Matching class name is the original userspace IOServiceMatching contract. */
@@ -72,6 +117,8 @@ class IOHIDEventService : public IOService {
  bool opened,pending,previousDown,lastValid;
  unsigned packetLogs,eventLogs,queueErrors,transferLogs,readerProgress,readerLogs,observedHead;
  unsigned initValid,published,clientPID,mapCalls,notificationCalls,enqueued,downEvents,moveEvents,upEvents,queueFailures;
+ unsigned queueEpoch,lastUpEpoch,lastUpEnqueued,lastUpTail,lastUpSequence,lastUpX,lastUpY,lastUpNotifyFlags;
+ uint64_t lastUpTimestamp,serviceSender;
  int initResult;
  static uint32_t readRegister(void *,uint32_t,uint32_t);
  static void writeRegister(void *,uint32_t,uint32_t,uint32_t);
@@ -126,12 +173,16 @@ bool IOHIDEventService::init(OSDictionary *dictionary)
  opened=pending=previousDown=lastValid=false;
  packetLogs=eventLogs=queueErrors=transferLogs=readerProgress=readerLogs=observedHead=0;
  initValid=published=clientPID=mapCalls=notificationCalls=enqueued=downEvents=moveEvents=upEvents=queueFailures=0;
+ queueEpoch=lastUpEpoch=lastUpEnqueued=lastUpTail=lastUpSequence=lastUpX=lastUpY=lastUpNotifyFlags=0;
+ /* IORegistryEntry assigns its ID on attachToParent, after init. */
+ lastUpTimestamp=0;serviceSender=0;
  initResult=LEO_TOUCH_NOT_READY;
  return true;
 }
 void IOHIDEventService::publishSnapshot(void)
 {
  if(!OSCompareAndSwap(0,1,&leo_touch_observer_guard)){leo_touch_observer_lost();return;}
+ serviceSender=getRegistryEntryID();
  LeoTouchObservation v={};v.version=IOS7_LEO_TOUCH_OBSERVATION_VERSION;v.known=1;
  v.init_valid=initValid;v.init_ready=state.ready;v.init_result=initResult;
  v.init_stage=state.stage;v.id_word=state.id_word;v.published=published;
@@ -140,7 +191,16 @@ void IOHIDEventService::publishSnapshot(void)
  v.queue_failures=queueFailures;v.reader_progress=readerProgress;
  v.reader_head=queue?queue->readerHead():0;v.writer_tail=queue?queue->writerTail():0;v.pending=pending;
  v.last_sequence=state.sequence;v.last_x=state.last_x;v.last_y=state.last_y;v.last_down=(state.last_contacts!=0);
- v.transport_errors=state.errors;leo_touch_observer_state=v;
+ v.transport_errors=state.errors;
+ v.queue_epoch=queueEpoch;v.last_up_epoch=lastUpEpoch;v.last_up_enqueued=lastUpEnqueued;
+ v.last_up_tail=lastUpTail;v.last_up_sequence=lastUpSequence;v.last_up_x=lastUpX;v.last_up_y=lastUpY;
+ v.last_up_notify_flags=lastUpNotifyFlags;v.last_up_timestamp=lastUpTimestamp;v.service_sender=serviceSender;
+ v.last_notify_result=UINT32_MAX;if(queue)queue->snapshot(&v);
+ if(queueEpoch==UINT32_MAX || enqueued==UINT32_MAX || downEvents==UINT32_MAX || moveEvents==UINT32_MAX ||
+  upEvents==UINT32_MAX || queueFailures==UINT32_MAX || readerProgress==UINT32_MAX || mapCalls==UINT32_MAX ||
+  notificationCalls==UINT32_MAX || state.packets==UINT32_MAX || state.sequence==UINT32_MAX || state.errors==UINT32_MAX)
+  v.observation_flags|=LEO_TOUCH_OBS_COUNTER_SATURATED;
+ leo_touch_observer_state=v;
  OSMemoryBarrier();leo_touch_observer_guard=0;
 }
 void IOHIDEventService::notePublished(void)
@@ -245,6 +305,11 @@ void IOHIDEventService::commitPacket(void)
 {
  bool down=(pendingPacket.finger.options&0x20000U)!=0;
  leo_touch_inc(&enqueued);if(down)leo_touch_inc(previousDown?&moveEvents:&downEvents);else leo_touch_inc(&upEvents);
+ if(!down){
+  lastUpEpoch=queueEpoch;lastUpEnqueued=enqueued;lastUpTail=queue->writerTail();
+  lastUpSequence=state.sequence;lastUpX=state.last_x;lastUpY=state.last_y;
+  lastUpTimestamp=pendingPacket.header.timeStamp;lastUpNotifyFlags=queue->enqueueNotificationFlags();
+ }
  if(eventLogs<32U){
   ++eventLogs;
   IOLog("IOS7LEO TOUCH enqueued seq=%u kind=%s x=%u y=%u down=%u timestamp=%llu; queue-enqueue-not-UI-consumption\n",
@@ -262,8 +327,10 @@ void IOHIDEventService::poll(void)
   leo_touch_inc(&readerProgress);
   if(readerLogs<8U){++readerLogs;IOLog("IOS7LEO TOUCH reader-head head=%u tail=%u; queue-progress-only\n",head,queue->writerTail());}
   observedHead=head;
-  publishSnapshot();
  }
+ /* Refresh actual shared RAM frontiers on every normal20ms poll, including
+  * no new input/read errors. Observation never initiates hardware reads. */
+ publishSnapshot();
  if(pending && opened){
   if(!queue->sane() || !queue->enqueue(&pendingPacket,sizeof(pendingPacket))){leo_touch_inc(&queueFailures);publishSnapshot();IOLockUnlock(lock);return;}
   commitPacket();
@@ -295,6 +362,7 @@ void IOHIDEventService::poll(void)
 void IOHIDEventService::closeReader(void)
 {
  opened=pending=previousDown=lastValid=false;
+ leo_touch_inc(&queueEpoch);
  queue->discardAll();observedHead=0;
  publishSnapshot();
 }
